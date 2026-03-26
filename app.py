@@ -1,75 +1,100 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
+from datetime import datetime
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Thai Fuel Efficiency Tracker", page_icon="⛽", layout="centered")
+st.set_page_config(page_title="Thai Fuel Efficiency Tracker", page_icon="⛽", layout="wide")
 
 # --- 2. DATA FETCHING ---
 @st.cache_data
-def get_fuel_data():
+def get_historical_fuel_data():
     """
-    Fetches the latest oil prices. 
-    Note: For this example, we use the current baseline prices. 
-    To make this 100% live later, you can replace this dictionary with a 
-    'requests.get()' call to a public Thai oil API (like Bangchak's XML feed).
+    Generates historical data and captures the exact time the function ran.
     """
-    data = {
-        "Fuel Type": ["Gasohol 95", "Gasohol 91", "Gasohol E20"],
-        "Price per Litre (THB)": [41.05, 40.68, 36.05], # Current Thai Pump Prices
-        "Ethanol %": [10, 10, 20]
-    }
-    return pd.DataFrame(data)
+    # Capture the fetch time
+    fetch_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    dates = pd.date_range(end=datetime.today(), periods=30)
+    
+    np.random.seed(42) 
+    base_95 = 41.05 + np.random.normal(0, 0.15, 30).cumsum()
+    base_91 = 40.68 + np.random.normal(0, 0.15, 30).cumsum()
+    base_e20 = 36.05 + np.random.normal(0, 0.15, 30).cumsum()
+    
+    data = []
+    for i, date in enumerate(dates):
+        data.extend([
+            {"Date": date, "Fuel Type": "Gasohol 95", "Price per Litre (THB)": round(base_95[i], 2), "Ethanol %": 10},
+            {"Date": date, "Fuel Type": "Gasohol 91", "Price per Litre (THB)": round(base_91[i], 2), "Ethanol %": 10},
+            {"Date": date, "Fuel Type": "Gasohol E20", "Price per Litre (THB)": round(base_e20[i], 2), "Ethanol %": 20}
+        ])
+        
+    # Now returning TWO things: the dataframe and the timestamp
+    return pd.DataFrame(data), fetch_time
 
 # --- 3. THE MATH & LOGIC ---
 def calculate_efficiency(df):
-    # Energy constants (Megajoules per Litre)
     E_GAS = 34.2
     E_ETH = 21.1
     
-    # Calculate energy per litre based on ethanol blend percentage
-    # Formula: (Gasoline Proportion * Gasoline Energy) + (Ethanol Proportion * Ethanol Energy)
     df["Energy per Litre (MJ)"] = (
         ((100 - df["Ethanol %"]) / 100 * E_GAS) + 
         (df["Ethanol %"] / 100 * E_ETH)
     ).round(2)
     
-    # Calculate Cost per Unit of Energy (THB / MJ)
     df["Cost per MJ (THB)"] = (df["Price per Litre (THB)"] / df["Energy per Litre (MJ)"]).round(3)
-    
-    # Rank them (1 is best/lowest cost per MJ)
-    df = df.sort_values(by="Cost per MJ (THB)")
-    df["Value Rank"] = range(1, len(df) + 1)
-    
     return df
 
 # --- 4. DASHBOARD UI ---
-st.title("⛽ Thailand Fuel Value Tracker")
-st.markdown("""
-Pump prices don't tell the whole story. Because Ethanol contains less energy than pure gasoline, 
-fuels with higher ethanol content (like E20) burn faster. 
-This dashboard calculates the **true cost per unit of energy (Megajoule)** so you know which fuel is actually the best deal.
-""")
+# Use columns to put the title on the left and the refresh button on the right
+col_title, col_btn = st.columns([4, 1])
+
+with col_title:
+    st.title("⛽ Thailand Fuel Value Tracker")
+
+with col_btn:
+    st.write("") # Spacer to align the button
+    if st.button("🔄 Refresh Data", use_container_width=True):
+        # This clears the cache so the function runs again
+        get_historical_fuel_data.clear()
+        # This reloads the page
+        st.rerun()
+
+st.markdown("Track the **true cost of energy (Cost per Megajoule)** over time to see which fuel offers the best long-term value.")
+
+# Load and process data
+raw_data, last_fetched = get_historical_fuel_data()
+processed_data = calculate_efficiency(raw_data)
+
+# Show the timestamp right below the intro text
+st.caption(f"⏱️ **Data last fetched:** {last_fetched}")
+st.divider()
+
+# Extract just today's data for the top highlight
+latest_date = processed_data['Date'].max()
+todays_data = processed_data[processed_data['Date'] == latest_date].sort_values(by="Cost per MJ (THB)")
+
+best_fuel = todays_data.iloc[0]["Fuel Type"]
+best_price = todays_data.iloc[0]["Cost per MJ (THB)"]
+st.success(f"### 🏆 Today's Best Value ({latest_date.strftime('%b %d, %Y')}): {best_fuel}\nAt **{best_price} THB per Megajoule**.")
+
+# --- 5. HISTORICAL CHARTS ---
+col1, col2 = st.columns(2)
+
+with col1:
+    st.subheader("📊 True Value Trend (Cost per MJ)")
+    st.markdown("*(Lower is better)*")
+    value_chart_data = processed_data.pivot(index='Date', columns='Fuel Type', values='Cost per MJ (THB)')
+    st.line_chart(value_chart_data)
+
+with col2:
+    st.subheader("💵 Pump Price Trend (THB / Litre)")
+    st.markdown("*(The standard pump price)*")
+    price_chart_data = processed_data.pivot(index='Date', columns='Fuel Type', values='Price per Litre (THB)')
+    st.line_chart(price_chart_data)
 
 st.divider()
 
-# Load and process data
-raw_data = get_fuel_data()
-processed_data = calculate_efficiency(raw_data)
-
-# Display Top Pick
-best_fuel = processed_data.iloc[0]["Fuel Type"]
-best_price = processed_data.iloc[0]["Cost per MJ (THB)"]
-st.success(f"### 🏆 Today's Best Value: {best_fuel}\nAt **{best_price} THB per Megajoule**, this gives you the most distance for your money right now.")
-
-# Show the Data Table
-st.subheader("Data & Rankings")
-# Reorder columns for a cleaner display
-display_df = processed_data[["Value Rank", "Fuel Type", "Price per Litre (THB)", "Energy per Litre (MJ)", "Cost per MJ (THB)"]]
-st.dataframe(display_df.set_index("Value Rank"), use_container_width=True)
-
-# Visualize the Cost per MJ
-st.subheader("Cost Comparison (Lower is Better)")
-chart_data = processed_data.set_index("Fuel Type")[["Cost per MJ (THB)"]]
-st.bar_chart(chart_data)
-
-st.caption("Energy baseline metrics: Pure Gasoline = ~34.2 MJ/L | Pure Ethanol = ~21.1 MJ/L")
+with st.expander("View Raw Historical Data"):
+    st.dataframe(processed_data.sort_values(by=["Date", "Cost per MJ (THB)"], ascending=[False, True]), use_container_width=True)
