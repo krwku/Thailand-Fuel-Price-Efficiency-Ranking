@@ -282,125 +282,65 @@ SCRAPE_URL = (
 @st.cache_data(ttl=6 * 3600, show_spinner="Fetching latest prices from ราคาน้ำมัน.com…")
 def scrape_live() -> pd.DataFrame | None:
     """
-    Scrape the price-change table from ราคาน้ำมัน.com using robust header mapping.
+    Scrape the price-change table from ราคาน้ำมัน.com.
     """
-    # Use a browser-like User-Agent to avoid 403 Forbidden errors
+    # 1. Use a standard browser User-Agent to avoid immediate bot-blocking
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9,th;q=0.8",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
     }
     
     try:
         resp = requests.get(SCRAPE_URL, headers=headers, timeout=20)
         resp.raise_for_status()
-    except Exception:
+    except requests.exceptions.RequestException as e:
+        # Surface the network error directly in Streamlit
+        st.error(f"🚨 Network Error during scraping: {e}")
         return None
 
     soup = BeautifulSoup(resp.text, "lxml")
-    rows_out = []
-    current_be_year = None
-    
-    # Helper to map column headers to indices
-    def get_col_indices(header_row):
-        cols = [td.get_text(strip=True) for td in header_row.find_all(["th", "td"])]
-        idx_map = {}
-        for i, c in enumerate(cols):
-            # Normalize text for matching
-            c_lower = c.lower()
-            if "gasohol 95" in c_lower or "g 95" in c_lower or "แก๊สโซฮอล์ 95" in c:
-                idx_map['g95'] = i
-            elif "gasohol 91" in c_lower or "g 91" in c_lower or "แก๊สโซฮอล์ 91" in c:
-                idx_map['g91'] = i
-            elif "e20" in c_lower or "แก๊สโซฮอล์ e20" in c:
-                idx_map['e20'] = i
-            elif "e85" in c_lower or "แก๊สโซฮอล์ e85" in c:
-                idx_map['e85'] = i
-        return idx_map
 
-    # Find all tables
+    # 2. Add a quick sanity check to see if the table exists at all
     tables = soup.find_all("table")
     if not tables:
+        st.warning("⚠️ Connected to the site, but couldn't find any HTML tables. The site layout may have changed, or it's using JavaScript to load data.")
         return None
 
+    rows_out = []
+    current_be_year = None
+
     for table in tables:
-        # Try to find the header row (usually the first row with 'วันที่' or similar)
-        header_row = None
-        col_map = {}
-        
-        # Check first few rows to identify headers
-        for tr in table.find_all("tr", limit=3):
-            cells = tr.find_all(["th", "td"])
-            if not cells: continue
-            
-            text = " ".join([x.get_text(strip=True) for x in cells])
-            # Identify header row by looking for key keywords
-            if "95" in text or "E20" in text or "วันที่" in text:
-                header_row = tr
-                col_map = get_col_indices(tr)
-                break
-        
-        # If we couldn't identify a header row with columns, skip table
-        if not col_map:
-            continue
-            
-        # Iterate through rows
         for tr in table.find_all("tr"):
             cells = [td.get_text(strip=True) for td in tr.find_all(["td", "th"])]
             if not cells:
                 continue
 
-            # Check for Year Header Row (e.g. "ปี พ.ศ. 2567")
-            # Logic: If row has 1-2 cells and contains a year 256x
-            if len(cells) <= 2:
-                for yr in range(2560, 2580):
-                    if str(yr) in " ".join(cells):
-                        current_be_year = yr
-                        break
-                continue # Skip this row, it's just a header
+            row_text = " ".join(cells)
+            for yr in range(2560, 2580):
+                if str(yr) in row_text and len(cells) <= 3:
+                    current_be_year = yr
+                    break
 
-            # Parse Data Row
-            # We need a valid year context to parse dates
-            if current_be_year is None:
-                continue
-                
-            # Date is typically the first column, but let's be safe
-            # We assume Date is col 0 if not mapped (standard for this site)
-            date_val = parse_thai_date(cells[0], current_be_year)
-            
-            if not date_val:
-                continue
-                
-            try:
-                # Extract prices using the mapped indices
-                # Use .get() with default None to avoid errors if a column is missing
-                def get_val(key):
-                    if key in col_map:
-                        idx = col_map[key]
-                        if idx < len(cells):
-                            return float(cells[idx].replace(",", ""))
-                    return None
-
-                row_data = {
-                    "date": date_val,
-                    "g95": get_val('g95'),
-                    "g91": get_val('g91'),
-                    "e20": get_val('e20'),
-                    "e85": get_val('e85')
-                }
-                
-                # Only append if we found at least one price
-                if any([row_data['g95'], row_data['g91'], row_data['e20'], row_data['e85']]):
-                    rows_out.append(row_data)
-            except ValueError:
-                continue
+            if current_be_year and len(cells) >= 6:
+                parsed_date = parse_thai_date(cells[0], current_be_year)
+                if parsed_date is None:
+                    continue
+                try:
+                    g95  = float(cells[2].replace(",", ""))
+                    g91  = float(cells[3].replace(",", ""))
+                    e20  = float(cells[4].replace(",", ""))
+                    e85  = float(cells[5].replace(",", ""))
+                    rows_out.append({"date": parsed_date, "g95": g95,
+                                     "g91": g91, "e20": e20, "e85": e85})
+                except (ValueError, IndexError):
+                    continue
 
     if not rows_out:
+        st.warning("⚠️ Tables were found, but no valid price rows were extracted. Column indexes might have shifted.")
         return None
 
-    df = pd.DataFrame(rows_out)
-    # Deduplicate and sort
-    df = df.drop_duplicates("date").sort_values("date").reset_index(drop=True)
+    df = pd.DataFrame(rows_out).drop_duplicates("date").sort_values("date").reset_index(drop=True)
     return df
 
 
