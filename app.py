@@ -280,6 +280,15 @@ SCRAPE_URL = (
 )
 
 @st.cache_data(ttl=6 * 3600, show_spinner="Fetching latest prices from ราคาน้ำมัน.com…")
+def safe_float(val: str) -> float:
+    """Convert string to float, returning NaN for dashes or empty cells."""
+    val = val.strip().replace(",", "")
+    if not val or val == "-":
+        return np.nan
+    try:
+        return float(val)
+    except ValueError:
+        return np.nan
 def scrape_live() -> pd.DataFrame | None:
     """
     Scrape the price-change table from ราคาน้ำมัน.com.
@@ -291,13 +300,26 @@ def scrape_live() -> pd.DataFrame | None:
         "Accept-Language": "en-US,en;q=0.5",
     }
     
-    try:
-        resp = requests.get(SCRAPE_URL, headers=headers, timeout=20)
-        resp.raise_for_status()
-    except requests.exceptions.RequestException as e:
-        # Surface the network error directly in Streamlit
-        st.error(f"🚨 Network Error during scraping: {e}")
-        return None
+    if current_be_year and len(cells) >= 6:
+                parsed_date = parse_thai_date(cells[0], current_be_year)
+                if parsed_date is None:
+                    continue
+                
+                # Use safe_float instead of raw float() so dashes don't break the row
+                g95 = safe_float(cells[2])
+                g91 = safe_float(cells[3])
+                e20 = safe_float(cells[4])
+                e85 = safe_float(cells[5])
+                
+                # Only append the row if at least one gasohol price exists
+                if not (np.isnan(g95) and np.isnan(g91) and np.isnan(e20)):
+                    rows_out.append({
+                        "date": parsed_date, 
+                        "g95": g95,
+                        "g91": g91, 
+                        "e20": e20, 
+                        "e85": e85
+                    })
 
     soup = BeautifulSoup(resp.text, "lxml")
 
