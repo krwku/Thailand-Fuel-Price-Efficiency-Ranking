@@ -273,10 +273,7 @@ def parse_thai_date(text: str, be_year: int) -> date | None:
 
 # ── web scraper ───────────────────────────────────────────────────────────────
 SCRAPE_URL = (
-    "https://xn--42cah7d0cxcvbbb9x.com/"
-    "%E0%B8%A3%E0%B8%B2%E0%B8%84%E0%B8%B2%E0%B8%99%E0%B9%89%E0%B8%B3"
-    "%E0%B8%A1%E0%B8%B1%E0%B8%99%E0%B8%A2%E0%B9%89%E0%B8%AD%E0%B8%99"
-    "%E0%B8%AB%E0%B8%A5%E0%B8%B1%E0%B8%87/"
+    "https://xn--42cah7d0cxcvbbb9x.com/%E0%B8%A3%E0%B8%B2%E0%B8%84%E0%B8%B2%E0%B8%99%E0%B9%89%E0%B8%B3%E0%B8%A1%E0%B8%B1%E0%B8%99%E0%B8%A2%E0%B9%89%E0%B8%AD%E0%B8%99%E0%B8%AB%E0%B8%A5%E0%B8%B1%E0%B8%87/"
 )
 
 @st.cache_data(ttl=6 * 3600, show_spinner="Fetching latest prices from ราคาน้ำมัน.com…")
