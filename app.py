@@ -279,7 +279,6 @@ SCRAPE_URL = (
     "%E0%B8%AB%E0%B8%A5%E0%B8%B1%E0%B8%87/"
 )
 
-@st.cache_data(ttl=6 * 3600, show_spinner="Fetching latest prices from ราคาน้ำมัน.com…")
 def safe_float(val: str) -> float:
     """Convert string to float, returning NaN for dashes or empty cells."""
     val = val.strip().replace(",", "")
@@ -289,44 +288,32 @@ def safe_float(val: str) -> float:
         return float(val)
     except ValueError:
         return np.nan
+
+@st.cache_data(ttl=6 * 3600, show_spinner="Fetching latest prices from ราคาน้ำมัน.com…")
 def scrape_live() -> pd.DataFrame | None:
     """
     Scrape the price-change table from ราคาน้ำมัน.com.
+    Returns a DataFrame with columns: date, g95, g91, e20, e85
+    — or None if the fetch fails.
     """
-    # 1. Use a standard browser User-Agent to avoid immediate bot-blocking
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.5",
     }
     
-    if current_be_year and len(cells) >= 6:
-                parsed_date = parse_thai_date(cells[0], current_be_year)
-                if parsed_date is None:
-                    continue
-                
-                # Use safe_float instead of raw float() so dashes don't break the row
-                g95 = safe_float(cells[2])
-                g91 = safe_float(cells[3])
-                e20 = safe_float(cells[4])
-                e85 = safe_float(cells[5])
-                
-                # Only append the row if at least one gasohol price exists
-                if not (np.isnan(g95) and np.isnan(g91) and np.isnan(e20)):
-                    rows_out.append({
-                        "date": parsed_date, 
-                        "g95": g95,
-                        "g91": g91, 
-                        "e20": e20, 
-                        "e85": e85
-                    })
+    try:
+        resp = requests.get(SCRAPE_URL, headers=headers, timeout=20)
+        resp.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        st.error(f"🚨 Network Error during scraping: {e}")
+        return None
 
     soup = BeautifulSoup(resp.text, "lxml")
 
-    # 2. Add a quick sanity check to see if the table exists at all
     tables = soup.find_all("table")
     if not tables:
-        st.warning("⚠️ Connected to the site, but couldn't find any HTML tables. The site layout may have changed, or it's using JavaScript to load data.")
+        st.warning("⚠️ Connected to the site, but couldn't find any HTML tables.")
         return None
 
     rows_out = []
@@ -338,28 +325,37 @@ def scrape_live() -> pd.DataFrame | None:
             if not cells:
                 continue
 
+            # Detect year-header rows
             row_text = " ".join(cells)
             for yr in range(2560, 2580):
                 if str(yr) in row_text and len(cells) <= 3:
                     current_be_year = yr
                     break
 
+            # Data row: needs >= 6 numeric-ish cells and a valid Thai date
             if current_be_year and len(cells) >= 6:
                 parsed_date = parse_thai_date(cells[0], current_be_year)
                 if parsed_date is None:
                     continue
-                try:
-                    g95  = float(cells[2].replace(",", ""))
-                    g91  = float(cells[3].replace(",", ""))
-                    e20  = float(cells[4].replace(",", ""))
-                    e85  = float(cells[5].replace(",", ""))
-                    rows_out.append({"date": parsed_date, "g95": g95,
-                                     "g91": g91, "e20": e20, "e85": e85})
-                except (ValueError, IndexError):
-                    continue
+                
+                # Safely parse floats, handling "-" as NaN
+                g95 = safe_float(cells[2])
+                g91 = safe_float(cells[3])
+                e20 = safe_float(cells[4])
+                e85 = safe_float(cells[5])
+                
+                # Only append if at least one gasohol price is valid
+                if not (np.isnan(g95) and np.isnan(g91) and np.isnan(e20)):
+                    rows_out.append({
+                        "date": parsed_date, 
+                        "g95": g95,
+                        "g91": g91, 
+                        "e20": e20, 
+                        "e85": e85
+                    })
 
     if not rows_out:
-        st.warning("⚠️ Tables were found, but no valid price rows were extracted. Column indexes might have shifted.")
+        st.warning("⚠️ Tables were found, but no valid price rows were extracted.")
         return None
 
     df = pd.DataFrame(rows_out).drop_duplicates("date").sort_values("date").reset_index(drop=True)
